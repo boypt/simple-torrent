@@ -131,7 +131,8 @@ A sample json will be created on the first run of simple-torrent.
 * `UploadRate`/`DownloadRate` The global speed limiter, a fixed level amoung `Low`(~50k/s), `Medium`(~500k/s) and `High`(~1500k/s) is accepted as value, all other values (or empty) will result in unlimited rate.
 * `TrackerListURL`: A https URL to a trackers list, this option is design to retrive public trackers from [ngosang/trackerslist](https://github.com/ngosang/trackerslist). If configred, all trackers will be added to each torrent task.
 
-##Systemd example
+## Systemd example
+
 Below is an example of a service for Simple Torrent located in `/cloud-torrent`
 
 ```
@@ -147,11 +148,13 @@ User=cloud-torrent
 [Install]
 WantedBy=multi-user.target
 ```
+
 You can create it with `sudo nano /etc/systemd/system/Simple-Torrent.service`
 Start it with `sudo systemctl start Simple-Torrent`
 Enable it at boot with `sudo systemctl enable Simple-Torrent`
 
-##Nginx Configuration
+## Nginx Configuration
+
 Below is an example of a Nginx configuration for Simple Torrent
 
 ```
@@ -211,7 +214,9 @@ server {
     }
 }
 ```
-include 'preset/SecurityHeaders';
+
+*include 'preset/SecurityHeaders';*
+
 ```
 dd_header X-Content-Type-Options nosniff;
 
@@ -226,7 +231,9 @@ add_header Referrer-Policy "no-referrer-when-downgrade";
 # optional header - use it with care - you are warned!
 # add_header Access-Control-Allow-Origin "*";
 ```
-include preset/Development;
+
+*include preset/Development;*
+
 ```
 #####   for public facing development sites; also called as staging sites   #####
 
@@ -242,7 +249,9 @@ location ~ \.xml\.gz$ { access_log off; deny all; }
 if ( $http_user_agent ~ "Google" ) { return 403; }
 if ( $http_user_agent ~ "bingbot" ) { return 403; }
 ```
-include preset/SSL;
+
+*include preset/SSL;*
+
 ```
     ssl_prefer_server_ciphers on;
 
@@ -262,7 +271,9 @@ include preset/SSL;
     ssl_ecdh_curve 'secp521r1:secp384r1';
     ssl_session_tickets off;
 ```
-include 'preset/HSTS';
+
+*include 'preset/HSTS';*
+
 ```
 add_header Strict-Transport-Security "max-age=31536000";
 ```
