@@ -133,7 +133,7 @@ A sample json will be created on the first run of simple-torrent.
 
 ## Systemd example
 
-Below is an example of a service for Simple Torrent located in `/cloud-torrent`
+Below is an example of a service for Simple Torrent located in `/cloud-torrent` with `cloud-torrent` as user
 
 ```
 [Unit]
