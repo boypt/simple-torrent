@@ -150,7 +150,9 @@ WantedBy=multi-user.target
 ```
 
 You can create it with `sudo nano /etc/systemd/system/Simple-Torrent.service`
+
 Start it with `sudo systemctl start Simple-Torrent`
+
 Enable it at boot with `sudo systemctl enable Simple-Torrent`
 
 ## Nginx Configuration
