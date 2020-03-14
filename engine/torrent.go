@@ -68,6 +68,7 @@ func (torrent *Torrent) updateLoaded(t *torrent.Torrent) {
 	if len(tfiles) > 0 && torrent.Files == nil {
 		torrent.Files = make([]*File, len(tfiles))
 	}
+	torrent.Done = true
 	//merge in files
 	for i, f := range tfiles {
 		path := f.Path()
@@ -82,6 +83,7 @@ func (torrent *Torrent) updateLoaded(t *torrent.Torrent) {
 		file.Percent = percent(file.Completed, file.Size)
 		file.Done = (file.Completed == file.Size)
 		file.f = f
+		torrent.Done = torrent.Done && (file.Done || !file.Started)
 	}
 
 	torrent.Stats = t.Stats()
@@ -105,7 +107,7 @@ func (torrent *Torrent) updateLoaded(t *torrent.Torrent) {
 
 	torrent.updatedAt = now
 	torrent.Percent = percent(bytes, torrent.Size)
-	torrent.Done = t.BytesMissing() == 0
+	//torrent.Done = t.BytesMissing() == 0
 
 	// calculate ratio
 	bRead := torrent.Stats.BytesReadData.Int64()
