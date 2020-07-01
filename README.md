@@ -50,6 +50,14 @@ The script install a systemd unit (under `scripts/cloud-torrent.service`) as ser
 $ docker run -d -p 3000:3000 -v /path/to/my/downloads:/downloads -v /path/to/my/torrents:/torrents boypt/cloud-torrent
 ```
 
+## Cloudron
+
+Cloudron is a complete solution for running apps on your server and keeping them up-to-date and secure.
+
+[![Install](https://cloudron.io/img/button.svg)](https://cloudron.io/store/com.github.cloudtorrent.html)
+
+The source code for the package can be found [here](https://git.cloudron.io/cloudron/simple-torrent-app).
+
 ## Source
 
 **Requirement**
