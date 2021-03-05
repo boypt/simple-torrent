@@ -9,13 +9,13 @@ This project is a re-branded fork of [cloud-torrent](https://github.com/jpillora
 # Features
 
 * Individual file download control (1.1.3+)
-* Run extrenal program on tasks completed: `DoneCmd`
+* Run external program on tasks completion: `DoneCmd`
 * Stops task when seeding ratio reached: `SeedRatio`
 * Download/Upload speed limiter: `UploadRate`/`DownloadRate`
 * Detailed transfer stats in web UI.
 * [Torrent Watcher](https://github.com/boypt/simple-torrent/wiki/Torrent-Watcher)
 * K8s/docker health-check endpoint `/healthz`
-* Extra trackers from extrenal source
+* Extra trackers from external source
 * Protocol Handler to `magnet:`
 * Magnet RSS subscribing supported
 * Flexible config file accepts multiple formats (.json/.yaml/.toml) ([by spf13/Viper](https://github.com/spf13/viper/)) (1.2.0+)
