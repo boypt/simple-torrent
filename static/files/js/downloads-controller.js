@@ -34,9 +34,9 @@ app.controller("NodeController", function($scope, $rootScope, $http, $timeout) {
   }
   var path = (n.$path = pathArray.join("/"));
   n.$closed = $scope.agoHrs(n.Modified) > 24;
-  $scope.audioPreview = /\.(mp3|m4a)$/.test(path);
-  $scope.imagePreview = /\.(jpe?g|png|gif)$/.test(path);
-  $scope.videoPreview = /\.(mp4|mkv|mov)$/.test(path);
+  $scope.audioPreview = /\.(mp3|m4a)$/i.test(path);
+  $scope.imagePreview = /\.(jpe?g|png|gif)$/i.test(path);
+  $scope.videoPreview = /\.(avi|wmv|mpeg|mp4|m4v|mov|asf|flv|f4v|rmvb|rm|3gp|vob)$/i.test(path);
 
   //search for this file
   var torrents = $rootScope.state.Torrents;
@@ -108,5 +108,8 @@ app.controller("NodeController", function($scope, $rootScope, $http, $timeout) {
 
   $scope.togglePreview = function() {
     $scope.showPreview = !$scope.showPreview;
+  };
+  $scope.tomp4 = function() {
+    $http.get("api/tomp4?input=" + n.$path+"&output="+n.$path);
   };
 });

@@ -13,7 +13,7 @@ var VERSION = "0.0.0-src" //set with ldflags
 
 func main() {
 	s := server.Server{
-		Title: "SimpleTorrent",
+		Title: "开始",
 		Port:  3000,
 	}
 

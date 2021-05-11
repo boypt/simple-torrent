@@ -87,6 +87,10 @@ func (s *Server) apiGET(w http.ResponseWriter, r *http.Request) error {
 	case "enginedebug":
 		w.Header().Set("Content-Type", "text/plain")
 		s.engine.WriteStauts(w)
+	case "tomp4":
+		path := s.engine.Config().DownloadDirectory + "/"
+		s.engine.Tomp4(path+r.URL.Query().Get("input"), path+r.URL.Query().Get("output"))
+		s.engine.WriteStauts(w)
 	default:
 		return errUnknowAct
 	}

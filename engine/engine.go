@@ -2,7 +2,11 @@ package engine
 
 import (
 	"bufio"
+	"cloud-torrent/engine/ffmpeg"
 	"fmt"
+	eglog "github.com/anacrolix/log"
+	"github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
 	"io"
 	"log"
 	"net/http"
@@ -10,13 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
-
-	eglog "github.com/anacrolix/log"
-	"github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
 )
 
 const (
@@ -270,6 +271,11 @@ func genEnv(dir, path, hash, ttype, api string, size int64, ts int64) []string {
 	return env
 }
 
+func (e *Engine) Tomp4(input, output string) error {
+	ffmpeg.Tomp4(input, output)
+	return nil
+}
+
 func (e *Engine) upsertTorrent(tt *torrent.Torrent) *Torrent {
 	ih := tt.InfoHash().HexString()
 	e.RLock()
@@ -313,7 +319,7 @@ func (e *Engine) StartTorrent(infohash string) error {
 	t.Started = true
 	t.StartedAt = time.Now()
 	for _, f := range t.Files {
-		if f != nil {
+		if regexp.MustCompile(e.config.FileSuffix).MatchString(strings.ToLower(f.Path)) {
 			f.Started = true
 		}
 	}
@@ -323,8 +329,17 @@ func (e *Engine) StartTorrent(infohash string) error {
 
 		// start all files by setting the priority to normal
 		for _, f := range t.t.Files() {
-			f.SetPriority(torrent.PiecePriorityNormal)
+			log.Println(f.Path())
+			log.Println(regexp.MustCompile(e.config.FileSuffix).MatchString(strings.ToLower(f.Path())))
+			if regexp.MustCompile(e.config.FileSuffix).MatchString(strings.ToLower(f.Path())) {
+				f.SetPriority(torrent.PiecePriorityNormal)
+			} else {
+				f.SetPriority(torrent.PiecePriorityNone)
+			}
 		}
+
+		// call to DownloadAll cause StartFile/StopFile not working
+		//    t.t.DownloadAll()
 	}
 	return nil
 }

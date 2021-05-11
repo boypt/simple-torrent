@@ -20,7 +20,8 @@ app.controller("ConfigController", function ($scope, $rootScope, storage, api) {
     "ProxyURL",
     "TrackerListURL",
     "AlwaysAddTrackers",
-    "RssURL"
+    "RssURL",
+    "FileSuffix"
   ];
 
   $scope.configTip = {

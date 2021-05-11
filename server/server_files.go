@@ -1,6 +1,7 @@
 package server
 
 import (
+	"cloud-torrent/engine/ffmpeg"
 	"errors"
 	"fmt"
 	"io/ioutil"
@@ -14,13 +15,19 @@ import (
 	"github.com/jpillora/archive"
 )
 
-const fileNumberLimit = 1000
+const fileNumberLimit = 100000
 
 type fsNode struct {
 	Name     string
 	Size     int64
 	Modified time.Time
+	Process  float64
 	Children []*fsNode
+}
+
+type ffm struct {
+	File string
+	Size float64
 }
 
 func (s *Server) listFiles() *fsNode {
@@ -84,6 +91,8 @@ func list(path string, info os.FileInfo, node *fsNode, n *int) error {
 	if (*n) > fileNumberLimit {
 		return errors.New("Over file limit") //limit number of files walked
 	}
+	m := ffmpeg.ListProgress(info.Name())
+	node.Process = m
 	node.Name = info.Name()
 	node.Size = info.Size()
 	node.Modified = info.ModTime()

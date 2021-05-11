@@ -51,6 +51,7 @@ require (
 	github.com/tomasen/realip v0.0.0-20180522021738-f0c99a92ddce // indirect
 	github.com/valyala/fasthttp v1.23.0 // indirect
 	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
+	github.com/xfrr/goffmpeg v0.0.0-20200825100927-5550d238df5c
 	github.com/yalp/jsonpath v0.0.0-20180802001716-5cc68e5049a0 // indirect
 	github.com/yudai/gojsondiff v1.0.0 // indirect
 	github.com/yudai/golcs v0.0.0-20170316035057-ecda9a501e82 // indirect

@@ -24,9 +24,12 @@ const (
 const (
 	defaultTrackerListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
 	defaultScraperURL     = "https://raw.githubusercontent.com/boypt/simple-torrent/master/scraper-config.json"
+	fileSuffix            = "avi|wmv|mpeg|mp4|m4v|mov|asf|flv|f4v|rmvb|rm|3gp|vob|jpe?g|png|gif|mp3|m4a"
 )
 
 type Config struct {
+	NoDefaultPortForwarding bool
+	DisableUTP              bool
 	AutoStart               bool
 	EngineDebug             bool
 	MuteEngineLog           bool
@@ -34,8 +37,6 @@ type Config struct {
 	ObfsRequirePreferred    bool
 	DisableTrackers         bool
 	DisableIPv6             bool
-	NoDefaultPortForwarding bool
-	DisableUTP              bool
 	DownloadDirectory       string
 	WatchDirectory          string
 	EnableUpload            bool
@@ -50,6 +51,7 @@ type Config struct {
 	ProxyURL                string
 	RssURL                  string
 	ScraperURL              string
+	FileSuffix              string
 }
 
 func InitConf(specPath string) (*Config, error) {
@@ -74,6 +76,7 @@ func InitConf(specPath string) (*Config, error) {
 	viper.SetDefault("IncomingPort", 50007)
 	viper.SetDefault("TrackerListURL", defaultTrackerListURL)
 	viper.SetDefault("ScraperURL", defaultScraperURL)
+	viper.SetDefault("FileSuffix", fileSuffix)
 
 	// user specific config path
 	if stat, err := os.Stat(specPath); stat != nil && err == nil {

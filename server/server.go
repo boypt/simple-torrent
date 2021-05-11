@@ -71,9 +71,11 @@ type Server struct {
 
 	//torrent engine
 	engine *engine.Engine
-	state  struct {
+
+	state struct {
 		velox.State
 		sync.Mutex
+		ffm             []*ffm
 		Config          engine.Config
 		SearchProviders scraper.Config
 		Downloads       *fsNode
