@@ -39,7 +39,12 @@ func (s *Server) webHandle(w http.ResponseWriter, r *http.Request) {
 	}
 	//api call
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		w.Header().Set("Access-Control-Allow-Headers", "authorization")
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			origin = "*"
+		}
+		w.Header().Set("Access-Control-Allow-Origin", origin)
+		w.Header().Set("Access-Control-Allow-Credentials", "true")
 		s.restAPIhandle(w, r)
 		return
 	}
@@ -51,7 +56,6 @@ func (s *Server) webHandle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) restAPIhandle(w http.ResponseWriter, r *http.Request) {
 	ret := "Bad Request"
 	if strings.HasPrefix(r.URL.Path, "/api/") {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		switch r.Method {
 		case "POST":
 			if err := s.apiPOST(r); err == nil {
