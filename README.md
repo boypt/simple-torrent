@@ -53,6 +53,14 @@ When running as a container, keep in mind:
 * You need also to expose your torrent incoming port (50007 by default) if you want to seed (`-p 50007:50007`). Also, you'll have to forward the port on your router.
 * Automatic port forwarding on your router via UPnP IGD will not work unless run in `host` mode (`--net=host`).
 
+## Cloudron
+
+Cloudron is a complete solution for running apps on your server and keeping them up-to-date and secure.
+
+[![Install](https://cloudron.io/img/button.svg)](https://cloudron.io/store/com.github.cloudtorrent.html)
+
+The source code for the package can be found [here](https://git.cloudron.io/cloudron/simple-torrent-app).
+
 ## Source
 
 **Requirement**
