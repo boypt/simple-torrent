@@ -2,38 +2,41 @@ package server
 
 import (
 	"compress/gzip"
-	"crypto/tls"
 	"fmt"
-	"log"
+	stdlog "log"
+	"net"
 	"net/http"
 	"os"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
-	"sync"
 	"time"
+
+	"github.com/boypt/simple-torrent/server/httpmiddleware"
 
 	"errors"
 
 	"github.com/NYTimes/gziphandler"
+	"github.com/anacrolix/torrent"
 	"github.com/boypt/scraper"
-	"github.com/jpillora/cloud-torrent/engine"
-	ctstatic "github.com/jpillora/cloud-torrent/static"
+	"github.com/boypt/simple-torrent/engine"
+	ctstatic "github.com/boypt/simple-torrent/static"
 	"github.com/jpillora/cookieauth"
 	"github.com/jpillora/requestlog"
 	"github.com/jpillora/velox"
 	"github.com/mmcdole/gofeed"
-	"github.com/radovskyb/watcher"
 	"github.com/skratchdot/open-golang/open"
 	"github.com/spf13/viper"
 )
 
 const (
-	cacheSavedPrefix = "_CLDAUTOSAVED_"
-	scraperUA        = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.36"
+	scraperUA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_4) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/57.0.2987.133 Safari/537.36"
 )
 
 var (
+	isListenOnUnix bool
+	log            *stdlog.Logger
 	//ErrDiskSpace raised if disk space not enough
 	ErrDiskSpace = errors.New("not enough disk space")
 )
@@ -42,8 +45,10 @@ var (
 type Server struct {
 	//config
 	Title          string `opts:"help=Title of this instance,env=TITLE"`
-	Port           int    `opts:"help=Listening port,env=PORT"`
-	Host           string `opts:"help=Listening interface (default all)"`
+	Port           int    `opts:"help=Listening port(depreciated. use --listen),env=PORT"`
+	Host           string `opts:"help=Listening interface (depreciated. use --listen),env=HOST"`
+	Listen         string `opts:"help=Listening Address:Port or unix socket (default all),env=LISTEN"`
+	UnixPerm       string `opts:"help=DomainSocket file permission (default 0666),env=UNIXPERM"`
 	Auth           string `opts:"help=Optional basic auth in form 'user:password',env=AUTH"`
 	ProxyURL       string `opts:"help=Proxy url,env=PROXY_URL"`
 	ConfigPath     string `opts:"help=Configuration file path (default /etc/cloud-torrent.yaml)"`
@@ -56,76 +61,75 @@ type Server struct {
 	Debug          bool   `opts:"help=Debug app"`
 	DebugTorrent   bool   `opts:"help=Debug torrent engine"`
 	ConvYAML       bool   `opts:"help=Convert old json config to yaml format."`
-	mainAddr       string
-	isPendingBoot  bool
 
 	//http handlers
-	files, static, rssh http.Handler
-	scraper             *scraper.Handler
-	scraperh            http.Handler
-
-	//file watcher
-	watcher *watcher.Watcher
+	scraperh, dlfilesh, statich, verStatich, rssh http.Handler
+	scraper                                       *scraper.Handler
 
 	//torrent engine
 	engine *engine.Engine
-	state  struct {
+
+	//sync req
+	syncConnected chan struct{}
+	syncSemphor   int32
+
+	state struct {
 		velox.State
-		sync.Mutex
-		Config          engine.Config
-		SearchProviders scraper.Config
-		Downloads       *fsNode
-		rssMark         map[string]string
-		rssCache        []*gofeed.Item
-		LatestRSSGuid   string
-		Torrents        map[string]*engine.Torrent
-		Users           map[string]string
-		Stats           struct {
-			Title   string
-			Version string
-			Runtime string
-			Uptime  time.Time
-			System  stats
+		UseQueue      bool
+		LatestRSSGuid string
+		Torrents      *map[string]*engine.Torrent
+		Users         map[string]string
+		Stats         struct {
+			System   osStats
+			ConnStat torrent.ConnStats
 		}
 	}
-}
 
-// GetRestAPI used by engine doneCmd
-func (s *Server) GetRestAPI() string {
-	return s.RestAPI
-}
-
-// GetIsPendingBoot used by engine doneCmd
-func (s *Server) GetIsPendingBoot() bool {
-	return s.isPendingBoot
+	rssMark         map[string]string
+	rssCache        []*gofeed.Item
+	searchProviders *scraper.Config
+	baseInfo        *BaseInfo
+	engineConfig    *engine.Config
 }
 
 // Run the server
 func (s *Server) Run(version string) error {
+
+	if s.DisableLogTime {
+		engine.SetLoggerFlag(stdlog.Lmsgprefix)
+		log.SetFlags(stdlog.Lmsgprefix)
+	}
+
+	if s.Host != "" || s.Port != 3000 {
+		log.Println("WARNING: --host --port arguments are depreciated, use --linsten instead, eg:`--listen :3000`")
+		s.Listen = fmt.Sprintf("%s:%d", s.Host, s.Port)
+		if strings.HasPrefix(s.Host, "unix:") {
+			s.Listen = s.Host
+		}
+	}
+	isListenOnUnix = strings.HasPrefix(s.Listen, "unix:")
+
 	isTLS := s.CertPath != "" || s.KeyPath != "" //poor man's XOR
 	if isTLS && (s.CertPath == "" || s.KeyPath == "") {
-		return fmt.Errorf("You must provide both key and cert paths")
+		return fmt.Errorf("ERROR: You must provide both key and cert paths")
 	}
-	s.state.Stats.Title = s.Title
-	s.state.Stats.Version = version
-	s.state.Stats.Runtime = strings.TrimPrefix(runtime.Version(), "go")
-	s.state.Stats.Uptime = time.Now()
-	s.state.Stats.System.pusher = velox.Pusher(&s.state)
+	s.baseInfo = &BaseInfo{
+		Title:   s.Title,
+		Version: version,
+		Runtime: strings.TrimPrefix(runtime.Version(), "go"),
+		Uptime:  time.Now().Unix(),
+	}
+
+	s.syncConnected = make(chan struct{})
 	//init maps
 	s.state.Users = make(map[string]string)
-	s.state.rssMark = make(map[string]string)
+	s.rssMark = make(map[string]string)
 
 	//will use a the local embed/ dir if it exists, otherwise will use the hardcoded embedded binaries
-	s.files = http.HandlerFunc(s.serveFiles)
-	s.static = ctstatic.FileSystemHandler()
+	s.statich = ctstatic.FileSystemHandler()
+	s.verStatich = http.StripPrefix("/"+version, s.statich)
+	s.dlfilesh = http.StripPrefix("/download/", http.HandlerFunc(s.serveDownloadFiles))
 	s.rssh = http.HandlerFunc(s.serveRSS)
-
-	// isPendingBoot last for 30s, doneCMD won't be triggered
-	s.isPendingBoot = true
-	go func() {
-		<-time.After(time.Second * 30)
-		s.isPendingBoot = false
-	}()
 
 	//scraper
 	s.scraper = &scraper.Handler{
@@ -138,7 +142,7 @@ func (s *Server) Run(version string) error {
 	if err := s.scraper.LoadConfig(defaultSearchConfig); err != nil {
 		log.Fatal(err)
 	}
-	s.state.SearchProviders = s.scraper.Config //share scraper config with web frontend
+	s.searchProviders = &s.scraper.Config //share scraper config with web frontend
 	s.scraperh = http.StripPrefix("/search", s.scraper)
 
 	// sync config from cmd arg to viper
@@ -160,7 +164,7 @@ func (s *Server) Run(version string) error {
 		if err := viper.WriteConfigAs(ymlcf); err != nil {
 			return err
 		}
-		return fmt.Errorf("Config file converted and written to: %s", ymlcf)
+		return fmt.Errorf("ERROR: Config file converted and written to: %s", ymlcf)
 	}
 
 	if err := detectDiskStat(c.DownloadDirectory); err != nil {
@@ -168,25 +172,31 @@ func (s *Server) Run(version string) error {
 	}
 
 	// engine configure
-	s.state.Config = *c
-	if err := s.engine.Configure(s.state.Config); err != nil {
+	s.state.Stats.System.diskDirPath = c.DownloadDirectory
+	s.state.UseQueue = (c.MaxConcurrentTask > 0)
+	s.engineConfig = c
+	s.baseInfo.AllowRuntimeConfigure = c.AllowRuntimeConfigure
+	if err := s.engine.Configure(c); err != nil {
 		return err
 	}
+	s.state.Torrents = s.engine.GetTorrents()
 
 	if s.Debug {
 		viper.Debug()
+		log.Printf("Effective Config: %#v", *c)
 	}
 
+	if err := s.engine.ParseTrackerList(); err != nil {
+		log.Println("UpdateTrackers err", err)
+	}
 	s.backgroundRoutines()
-	s.torrentWatcher()
 
-	s.mainAddr = fmt.Sprintf("%s:%d", s.Host, s.Port)
-	proto := "http"
-	if isTLS {
-		proto += "s"
-	}
-	if s.Open {
+	if s.Open && !isListenOnUnix {
 		go func() {
+			proto := "http"
+			if isTLS {
+				proto += "s"
+			}
 			time.Sleep(1 * time.Second)
 			open.Run(fmt.Sprintf("%s://localhost:%d", proto, s.Port))
 		}()
@@ -196,8 +206,12 @@ func (s *Server) Run(version string) error {
 	if s.RestAPI != "" {
 		go func() {
 			restServer := http.Server{
-				Addr:    s.RestAPI,
-				Handler: requestlog.Wrap(http.Handler(http.HandlerFunc(s.restAPIhandle))),
+				Addr: s.RestAPI,
+				Handler: requestlog.Wrap(
+					httpmiddleware.RealIP(
+						http.Handler(http.HandlerFunc(s.restAPIhandle)),
+					),
+				),
 			}
 			log.Println("[RestAPI] listening at ", s.RestAPI)
 			if err := restServer.ListenAndServe(); err != nil {
@@ -209,8 +223,15 @@ func (s *Server) Run(version string) error {
 	//define handler chain, from last to first
 	h := http.Handler(http.HandlerFunc(s.webHandle))
 	//gzip
-	gzipWrap, _ := gziphandler.NewGzipLevelAndMinSize(gzip.DefaultCompression, 0)
-	h = gzipWrap(h)
+	h = httpmiddleware.RealIP(h)
+	h = httpmiddleware.Liveness(h)
+
+	// dont enable gzip handler if certantlly we are behind a web server
+	if !isListenOnUnix {
+		gzipWrap, _ := gziphandler.NewGzipLevelAndMinSize(gzip.DefaultCompression, 1024)
+		h = gzipWrap(h)
+	}
+
 	//auth
 	if s.Auth != "" {
 		user := s.Auth
@@ -222,31 +243,46 @@ func (s *Server) Run(version string) error {
 		h = cookieauth.New().SetUserPass(user, pass).Wrap(h)
 		log.Printf("Enabled HTTP authentication")
 	}
-	h = livenessWrap(h)
 	if s.Log {
 		h = requestlog.Wrap(h)
 	}
-	//serve!
+
 	server := http.Server{
-		//disable http2 due to velox bug
-		TLSNextProto: map[string]func(*http.Server, *tls.Conn, http.Handler){},
-		//address
-		Addr: s.mainAddr,
 		//handler stack
 		Handler: h,
 	}
-	listenLog := "0.0.0.0" + s.mainAddr
-	if !strings.HasPrefix(s.mainAddr, ":") {
-		listenLog = s.mainAddr
+
+	//serve!
+	var listener net.Listener
+	if isListenOnUnix {
+		sockPath := s.Listen[5:]
+		if _, err := os.Stat(sockPath); !errors.Is(err, os.ErrNotExist) {
+			log.Println("Listening sock exists, removing", sockPath)
+			os.Remove(sockPath)
+		}
+		log.Println("Listening at", s.Listen)
+		listener, err = net.Listen("unix", sockPath)
+		if err != nil {
+			log.Fatalln("Failed listening", err)
+		}
+		if um, err := strconv.ParseInt(s.UnixPerm, 8, 0); err == nil {
+			uxmod := os.FileMode(um)
+			log.Println("Listening DomainSocket mode change to:", uxmod.String(), s.UnixPerm)
+			os.Chmod(sockPath, uxmod)
+		}
+	} else {
+		log.Println("Listening at", s.Listen)
+		listener, err = net.Listen("tcp", s.Listen)
+		if err != nil {
+			log.Fatalln("Failed listening", err)
+		}
+		if isTLS {
+			return server.ServeTLS(listener, s.CertPath, s.KeyPath)
+		}
 	}
-	log.Printf("Listening at %s://%s", proto, listenLog)
-	if isTLS {
-		return server.ListenAndServeTLS(s.CertPath, s.KeyPath)
-	}
-	return server.ListenAndServe()
+	return server.Serve(listener)
 }
 
-func fileExists(fn string) bool {
-	stat, err := os.Stat(fn)
-	return stat != nil && err == nil
+func init() {
+	log = stdlog.New(os.Stdout, "[server]", stdlog.LstdFlags|stdlog.Lmsgprefix)
 }

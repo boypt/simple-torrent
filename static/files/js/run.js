@@ -1,27 +1,29 @@
 /* globals app,window */
 
 //RootController
-app.run(function ($rootScope, search, api, apiget, storage) {
+app.run(function ($rootScope, $window, $location, $log, search, api, apiget, storage, reqinfo, reqerr) {
   var $scope = (window.scope = $rootScope);
 
-  var pn = window.location.pathname
-  if (pn[pn.length - 1] != "/") {
-    pn += "/"
-  }
-
   // register as "magnet:" protocol handler
-  if ('registerProtocolHandler' in navigator) {
-    navigator.registerProtocolHandler(
-      'magnet',
-      document.location.origin + pn + 'api/magnet?m=%s',
-      'SimpleTorrent'
-    );
+  // only available when visited as a https site
+  if ('registerProtocolHandler' in $window.navigator) {
+    var handlurl = $location.absUrl() + 'api/magnet?m=%s';
+    $window.navigator.registerProtocolHandler('magnet', handlurl, 'SimpleTorrent');
+    $log.info("Registered protocol handler", handlurl);
   }
 
   // velox event stream framework
   $scope.state = {};
   $scope.hasConnected = false;
-  var v = velox(pn + "sync", $scope.state);
+  var v, vtype = storage.veloxCON || "sse";
+  var syncLoc = $location.absUrl() + "sync";
+  if (vtype == "ws") {
+    v = velox.ws(syncLoc, $scope.state);
+    $log.info("Velox is using Websocket")
+  } else {
+    v = velox.sse(syncLoc, $scope.state);
+    $log.info("Velox is using EventStream")
+  }
   v.onupdate = function () {
     $scope.$applyAsync();
   };
@@ -33,25 +35,27 @@ app.run(function ($rootScope, search, api, apiget, storage) {
       $scope.connected = connected;
     });
   };
+
+  $scope.DownloadingFiles = {};
+  $scope.$watch("state.Torrents", function (newobj, oldobj) {
+    $scope.DownloadingFiles = {};
+    if (!angular.isObject(newobj) || angular.equals(newobj, {})) {
+      return
+    }
+
+    angular.forEach(newobj, function (tval) {
+      angular.forEach(tval.Files, function (fval) {
+        if (fval.Percent < 100) {
+          var base = fval.Path.split(/[\\/]/).pop()
+          $scope.DownloadingFiles[base] = true;
+        }
+      });
+    });
+  }, true)
   //expose services
   $scope.search = search;
   $scope.api = api;
   $scope.storage = storage;
-
-  $scope.inputType = function (k, v) {
-    multiLines = ["RssURL"];
-    if (multiLines.includes(k)) {
-      return "multiline"
-    }
-
-    switch (typeof v) {
-      case "number":
-        return "number";
-      case "boolean":
-        return "check";
-    }
-    return "text";
-  };
 
   $scope.ready = function (f) {
     var path = typeof f === "object" ? f.path : f;
@@ -83,6 +87,14 @@ app.run(function ($rootScope, search, api, apiget, storage) {
     return $scope.agoHrs(t) <= hrs;
   };
 
+  $scope.etaTime = function (dled, total, dlrate) {
+    if (dlrate <= 0) {
+      return "Infinite"
+    }
+    etaSec = Math.round((total - dled) / dlrate)
+    return moment().add(etaSec, 'seconds').fromNow();
+  };
+
   $scope.uploadTorrent = function (event) {
     var fileContainer = event.dataTransfer || event.target;
     if (!fileContainer || !fileContainer.files) {
@@ -100,14 +112,14 @@ app.run(function ($rootScope, search, api, apiget, storage) {
       reader.readAsArrayBuffer(file);
       reader.onload = function () {
         var data = new Uint8Array(reader.result);
-        api.torrentfile(data);
+        api.torrentfile(data).then(reqinfo, reqerr);
       };
     });
   };
 
   $scope.alertErr = function (errMsg) {
     $scope.err = errMsg;
-    $scope.$apply();
+    $scope.$applyAsync();
     return false;
   }
 
@@ -120,6 +132,11 @@ app.run(function ($rootScope, search, api, apiget, storage) {
         break;
       case "config":
         $rootScope.config.edit = !$rootScope.config.edit;
+        if ($rootScope.config.edit) {
+          apiget.configure().then(function (xhr) {
+            $rootScope.config.configObj = xhr.data;
+          })
+        }
         break
       case "omni":
         $rootScope.omni.edit = !$rootScope.omni.edit;
@@ -127,19 +144,33 @@ app.run(function ($rootScope, search, api, apiget, storage) {
       case "enginedebug":
         $rootScope.showEnineStatus = !$rootScope.showEnineStatus;
         if ($rootScope.showEnineStatus) {
-          $rootScope.EngineStatus = "loading...";
-          apiget.enginedebug().success(function (data) {
-            $rootScope.EngineStatus = data;
-          })
+          $rootScope.EngineStatus = $scope.Trackers = "loading...";
+          apiget.enginedebug().then(function (xhr) {
+            $scope.EngineStatus = xhr.data.EngineStatus;
+            $scope.Trackers = xhr.data.Trackers.join("\n");
+          });
         }
         break
     }
   }
 
+  $scope.toggleWebsocket = function () {
+    storage.veloxCON = (storage.veloxCON !== "ws") ? "ws" : "sse";
+    switch (storage.veloxCON) {
+      case "ws":
+        $rootScope.info = "Websocket mode, refresh to take affect.";
+        break
+      case "sse":
+        $rootScope.info = "Eventstream mode, refresh to take affect.";
+        break
+    }
+    $rootScope.$applyAsync();
+  }
+
   //page-wide keybinding, listen for space,
   //toggle pause/play the video on-screen
   document.addEventListener("keydown", function (e) {
-    if (e.keyCode !== 32) {
+    if (e.code !== "Space") { // space key
       return;
     }
     var typing = document.querySelector("input:focus");
@@ -166,6 +197,7 @@ app.run(function ($rootScope, search, api, apiget, storage) {
       break;
     }
   });
+
 });
 
 app.config([

@@ -1,15 +1,13 @@
 package engine
 
 import (
-	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
+	"time"
 
-	"github.com/c2h5oh/datasize"
 	"github.com/spf13/viper"
 	"golang.org/x/time/rate"
 )
@@ -19,33 +17,41 @@ const (
 	NeedEngineReConfig
 	NeedRestartWatch
 	NeedUpdateTracker
+	NeedLoadWaitList
+	NeedUpdateRSS
 )
 
 const (
-	trackerListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
+	defaultTrackerListURL = "https://raw.githubusercontent.com/ngosang/trackerslist/master/trackers_best.txt"
 )
 
 type Config struct {
-	AutoStart            bool
-	EngineDebug          bool
-	MuteEngineLog        bool
-	ObfsPreferred        bool
-	ObfsRequirePreferred bool
-	DisableTrackers      bool
-	DisableIPv6          bool
-	DownloadDirectory    string
-	WatchDirectory       string
-	EnableUpload         bool
-	EnableSeeding        bool
-	IncomingPort         int
-	DoneCmd              string
-	SeedRatio            float32
-	UploadRate           string
-	DownloadRate         string
-	TrackerListURL       string
-	AlwaysAddTrackers    bool
-	ProxyURL             string
-	RssURL               string
+	AutoStart               bool
+	EngineDebug             bool
+	MuteEngineLog           bool
+	ObfsPreferred           bool
+	ObfsRequirePreferred    bool
+	DisableTrackers         bool
+	DisableIPv6             bool
+	NoDefaultPortForwarding bool
+	DisableUTP              bool
+	DownloadDirectory       string
+	WatchDirectory          string
+	EnableUpload            bool
+	EnableSeeding           bool
+	IncomingPort            int
+	DoneCmd                 string
+	SeedRatio               float32
+	SeedTime                time.Duration
+	UploadRate              string
+	DownloadRate            string
+	TrackerList             string
+	AlwaysAddTrackers       bool
+	ProxyURL                string
+	RssURL                  string
+	ScraperURL              string
+	MaxConcurrentTask       int
+	AllowRuntimeConfigure   bool
 }
 
 func InitConf(specPath string) (*Config, error) {
@@ -54,17 +60,23 @@ func InitConf(specPath string) (*Config, error) {
 	viper.AddConfigPath("/etc/cloud-torrent/")
 	viper.AddConfigPath("/etc/")
 	viper.AddConfigPath("$HOME/.cloud-torrent")
+	viper.AddConfigPath(".")
 
 	viper.SetDefault("DownloadDirectory", "./downloads")
 	viper.SetDefault("WatchDirectory", "./torrents")
 	viper.SetDefault("EnableUpload", true)
+	viper.SetDefault("EnableSeeding", true)
+	viper.SetDefault("NoDefaultPortForwarding", true)
+	viper.SetDefault("DisableUTP", false)
 	viper.SetDefault("AutoStart", true)
 	viper.SetDefault("DoneCmd", "")
 	viper.SetDefault("SeedRatio", 0)
+	viper.SetDefault("SeedTime", "0")
 	viper.SetDefault("ObfsPreferred", true)
 	viper.SetDefault("ObfsRequirePreferred", false)
 	viper.SetDefault("IncomingPort", 50007)
-	viper.SetDefault("TrackerListURL", trackerListURL)
+	viper.SetDefault("MaxConcurrentTask", 0)
+	viper.SetDefault("AllowRuntimeConfigure", true)
 
 	// user specific config path
 	if stat, err := os.Stat(specPath); stat != nil && err == nil {
@@ -102,7 +114,7 @@ func InitConf(specPath string) (*Config, error) {
 		if err := viper.WriteConfig(); err != nil {
 			return nil, err
 		}
-		log.Println("[config] config file written: ", cf)
+		log.Println("[config] config file written: ", cf, "exists:", configExists, "dirchanged", dirChanged)
 	}
 
 	return c, nil
@@ -113,7 +125,7 @@ func (c *Config) NormlizeConfigDir() (bool, error) {
 	if c.DownloadDirectory != "" {
 		dldir, err := filepath.Abs(c.DownloadDirectory)
 		if err != nil {
-			return false, fmt.Errorf("Invalid path %s, %w", c.WatchDirectory, err)
+			return false, fmt.Errorf("ERROR: Invalid path %s, %w", c.WatchDirectory, err)
 		}
 		if c.DownloadDirectory != dldir {
 			changed = true
@@ -124,7 +136,7 @@ func (c *Config) NormlizeConfigDir() (bool, error) {
 	if c.WatchDirectory != "" {
 		wdir, err := filepath.Abs(c.WatchDirectory)
 		if err != nil {
-			return false, fmt.Errorf("Invalid path %s, %w", c.WatchDirectory, err)
+			return false, fmt.Errorf("ERROR: Invalid path %s, %w", c.WatchDirectory, err)
 		}
 		if c.WatchDirectory != wdir {
 			changed = true
@@ -165,8 +177,14 @@ func (c *Config) Validate(nc *Config) uint8 {
 	if c.WatchDirectory != nc.WatchDirectory {
 		status |= NeedRestartWatch
 	}
-	if c.TrackerListURL != nc.TrackerListURL {
+	if c.TrackerList != nc.TrackerList {
 		status |= NeedUpdateTracker
+	}
+	if c.MaxConcurrentTask < nc.MaxConcurrentTask {
+		status |= NeedLoadWaitList
+	}
+	if c.RssURL != nc.RssURL {
+		status |= NeedUpdateRSS
 	}
 
 	rfc := reflect.ValueOf(c)
@@ -206,34 +224,10 @@ func (c *Config) SyncViper(nc Config) error {
 	return viper.WriteConfig()
 }
 
-func rateLimiter(rstr string) (*rate.Limiter, error) {
-	var rateSize int
-	rstr = strings.ToLower(strings.TrimSpace(rstr))
-	switch rstr {
-	case "low":
-		// ~50k/s
-		rateSize = 50000
-	case "medium":
-		// ~500k/s
-		rateSize = 500000
-	case "high":
-		// ~1500k/s
-		rateSize = 1500000
-	case "unlimited", "0", "":
-		// unlimited
-		return rate.NewLimiter(rate.Inf, 0), nil
-	default:
-		var v datasize.ByteSize
-		err := v.UnmarshalText([]byte(rstr))
-		if err != nil {
-			return nil, err
-		}
-		if v > 2147483647 {
-			// max of int, unlimited
-			return nil, errors.New("excceed int val")
-		}
-
-		rateSize = int(v)
+func (c *Config) GetCmdConfig() (string, []string, error) {
+	if c.DoneCmd == "" {
+		return "", nil, fmt.Errorf("unconfigred Donecmd")
 	}
-	return rate.NewLimiter(rate.Limit(rateSize), rateSize*3), nil
+	env := append(os.Environ(), fmt.Sprintf("CLD_DIR=%s", c.DownloadDirectory))
+	return c.DoneCmd, env, nil
 }

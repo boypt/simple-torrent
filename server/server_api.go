@@ -1,29 +1,24 @@
 package server
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html/template"
 	"io/ioutil"
-	"log"
 	"net/http"
 	"reflect"
 	"strings"
 	"time"
 
-	"github.com/anacrolix/torrent"
-	"github.com/anacrolix/torrent/metainfo"
-
-	"github.com/jpillora/cloud-torrent/engine"
-	ctstatic "github.com/jpillora/cloud-torrent/static"
+	"github.com/boypt/simple-torrent/engine"
 )
 
 var (
 	errInvalidReq = errors.New("INVALID REQUEST")
-	errUnknowAct  = errors.New("Unkown Action")
-	errUnknowPath = errors.New("Unkown Path")
+	errUnknowAct  = errors.New("UNKOWN ACTION")
+	errUnknowPath = errors.New("UNKOWN PATH")
 )
 
 func (s *Server) apiGET(w http.ResponseWriter, r *http.Request) error {
@@ -34,15 +29,10 @@ func (s *Server) apiGET(w http.ResponseWriter, r *http.Request) error {
 		return errUnknowAct
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	action := routeDirs[0]
 	switch action {
 	case "magnet": // adds magnet by GET: /api/magnet?m=...
-		c, err := ctstatic.ReadAll("template/magadded.html")
-		if err != nil {
-			log.Fatalln(err)
-		}
-
-		tmpl := template.Must(template.New("tpl").Parse(string(c)))
 		tdata := struct {
 			HasError bool
 			Error    string
@@ -51,18 +41,20 @@ func (s *Server) apiGET(w http.ResponseWriter, r *http.Request) error {
 
 		m := r.URL.Query().Get("m")
 		if err := s.engine.NewMagnet(m); err != nil {
-			tdata.HasError = true
-			tdata.Error = err.Error()
+			if !errors.Is(err, engine.ErrMaxConnTasks) {
+				tdata.HasError = true
+				tdata.Error = err.Error()
+			}
 		}
-
 		tdata.Magnet = m
-		tmpl.Execute(w, tdata)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		htmlTPL["magadded.html"].Execute(w, tdata)
+	case "configure":
+		json.NewEncoder(w).Encode(*(s.engineConfig))
 	case "torrents":
 		json.NewEncoder(w).Encode(s.engine.GetTorrents())
 	case "files":
-		s.state.Lock()
-		json.NewEncoder(w).Encode(s.state.Downloads)
-		s.state.Unlock()
+		json.NewEncoder(w).Encode(s.listFiles())
 	case "torrent":
 		if len(routeDirs) != 2 {
 			return errUnknowAct
@@ -72,18 +64,25 @@ func (s *Server) apiGET(w http.ResponseWriter, r *http.Request) error {
 			return errUnknowPath
 		}
 		m := s.engine.GetTorrents()
-		if t, ok := m[hash]; ok {
+		if t, ok := (*m)[hash]; ok {
 			json.NewEncoder(w).Encode(t)
 		} else {
 			return errUnknowPath
 		}
 	case "stat":
-		s.state.Lock()
+		s.state.Stats.System.loadStats()
+		s.state.Stats.ConnStat = s.engine.ConnStat()
 		json.NewEncoder(w).Encode(s.state.Stats)
-		s.state.Unlock()
+	case "searchproviders":
+		json.NewEncoder(w).Encode(s.searchProviders)
 	case "enginedebug":
-		w.Header().Set("Content-Type", "text/plain")
-		s.engine.WriteStauts(w)
+		w.Header().Set("Content-Type", "application/json")
+		var buf bytes.Buffer
+		s.engine.WriteStauts(bufio.NewWriter(&buf))
+		json.NewEncoder(w).Encode(struct {
+			EngineStatus string
+			Trackers     []string
+		}{buf.String(), s.engine.Trackers})
 	default:
 		return errUnknowAct
 	}
@@ -96,12 +95,12 @@ func (s *Server) apiPOST(r *http.Request) error {
 
 	action := strings.TrimPrefix(r.URL.Path, "/api/")
 	if r.Method != "POST" {
-		return fmt.Errorf("Invalid request method (expecting POST)")
+		return fmt.Errorf("ERROR: Invalid request method (expecting POST)")
 	}
 
 	data, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		return fmt.Errorf("Failed to download request body: %w", err)
+		return fmt.Errorf("ERROR: Failed to download request body: %w", err)
 	}
 
 	//convert url into torrent bytes
@@ -109,27 +108,26 @@ func (s *Server) apiPOST(r *http.Request) error {
 		url := string(data)
 		remote, err := http.Get(url)
 		if err != nil {
-			return fmt.Errorf("Invalid remote torrent URL: %s %w", url, err)
+			return fmt.Errorf("ERROR: Invalid remote torrent URL: %s %w", url, err)
 		}
-		//TODO enforce max body size (32k?)
-		data, err = ioutil.ReadAll(remote.Body)
 		defer remote.Body.Close()
+		if remote.ContentLength > 512*1024 {
+			//enforce max body size (512k)
+			return fmt.Errorf("ERROR: Remote torrent too large")
+		}
+		data, err = ioutil.ReadAll(remote.Body)
 		if err != nil {
-			return fmt.Errorf("Failed to download remote torrent: %w", err)
+			return fmt.Errorf("ERROR: Failed to download remote torrent: %w", err)
 		}
 		action = "torrentfile"
 	}
 
 	//convert torrent bytes into magnet
 	if action == "torrentfile" {
-		reader := bytes.NewBuffer(data)
-		info, err := metainfo.Load(reader)
-		if err != nil {
-			return err
-		}
-		spec := torrent.TorrentSpecFromMetaInfo(info)
-		if err := s.engine.NewTorrentBySpec(spec); err != nil {
-			return fmt.Errorf("Torrent error: %w", err)
+		if err := s.engine.NewTorrentByReader(bytes.NewBuffer(data)); err != nil {
+			if !errors.Is(err, engine.ErrMaxConnTasks) {
+				return err
+			}
 		}
 		return nil
 	}
@@ -143,7 +141,10 @@ func (s *Server) apiPOST(r *http.Request) error {
 		return s.apiConfigure(data)
 	case "magnet":
 		if err := s.engine.NewMagnet(string(data)); err != nil {
-			return fmt.Errorf("Magnet error: %w", err)
+			if errors.Is(err, engine.ErrMaxConnTasks) {
+				return nil
+			}
+			return fmt.Errorf("ERROR: Magnet error: %w", err)
 		}
 	case "torrent":
 		cmd := strings.SplitN(string(data), ":", 2)
@@ -154,7 +155,7 @@ func (s *Server) apiPOST(r *http.Request) error {
 		infohash := cmd[1]
 		switch state {
 		case "start":
-			if err := s.engine.StartTorrent(infohash); err != nil {
+			if err := s.engine.ManualStartTorrent(infohash); err != nil {
 				return err
 			}
 		case "stop":
@@ -165,8 +166,14 @@ func (s *Server) apiPOST(r *http.Request) error {
 			if err := s.engine.DeleteTorrent(infohash); err != nil {
 				return err
 			}
+			s.engine.RemoveCache(infohash)
+		case "move2wait":
+			if err := s.engine.DeleteTorrent(infohash); err != nil {
+				return err
+			}
+			s.engine.PushWaitTask(infohash)
 		default:
-			return fmt.Errorf("Invalid state: %s", state)
+			return fmt.Errorf("ERROR: Invalid state: %s", state)
 		}
 	case "file":
 		cmd := strings.SplitN(string(data), ":", 3)
@@ -186,18 +193,19 @@ func (s *Server) apiPOST(r *http.Request) error {
 				return err
 			}
 		default:
-			return fmt.Errorf("Invalid state: %s", state)
+			return fmt.Errorf("ERROR: Invalid state: %s", state)
 		}
 	default:
-		return fmt.Errorf("Invalid action: %s", action)
+		return fmt.Errorf("ERROR: Invalid action: %s", action)
 	}
 	return nil
 }
 
 func (s *Server) apiConfigure(data []byte) error {
 
-	// update search config anyway
-	go s.fetchSearchConfig()
+	if !s.engineConfig.AllowRuntimeConfigure {
+		return errors.New("AllowRuntimeConfigure is set to false")
+	}
 
 	c := engine.Config{}
 	if err := json.Unmarshal(data, &c); err != nil {
@@ -207,31 +215,28 @@ func (s *Server) apiConfigure(data []byte) error {
 		return err
 	}
 
-	if !reflect.DeepEqual(s.state.Config, c) {
-		status := s.state.Config.Validate(&c)
+	if !reflect.DeepEqual(s.engineConfig, c) {
+		status := s.engineConfig.Validate(&c)
 
 		if status&engine.ForbidRuntimeChange > 0 {
 			log.Printf("[api] warnning! someone tried to change DoneCmd config")
-			return errors.New("Nice Try! But this is NOT allowed being changed on runtime")
+			return errors.New("ERROR: This item is NOT allowed being changed on runtime")
 		}
 		if status&engine.NeedRestartWatch > 0 {
-			s.torrentWatcher()
+			s.engine.StartTorrentWatcher()
 			log.Printf("[api] file watcher restartd")
-		}
-		if status&engine.NeedUpdateTracker > 0 {
-			go s.engine.UpdateTrackers()
 		}
 
 		// now it's safe to save the configure
-		if err := s.state.Config.SyncViper(c); err != nil {
+		if err := s.engineConfig.SyncViper(c); err != nil {
 			return err
 		}
-		s.state.Config = c
+		s.engineConfig = &c
 		log.Printf("[api] config saved")
 
 		// finally to reconfigure the engine
 		if status&engine.NeedEngineReConfig > 0 {
-			if err := s.engine.Configure(s.state.Config); err != nil {
+			if err := s.engine.Configure(s.engineConfig); err != nil {
 				if !s.engine.IsConfigred() {
 					go func() {
 						log.Println("[apiConfigure] serious error occured while reconfigured, will exit in 10s")
@@ -241,16 +246,43 @@ func (s *Server) apiConfigure(data []byte) error {
 				}
 				return err
 			}
-			if err := s.RestoreTorrent(); err != nil {
-				return err
-			}
+			s.engine.RestoreCacheDir()
 			log.Printf("[api] torrent engine reconfigred")
 		} else {
-			s.engine.SetConfig(s.state.Config)
+			s.engine.SetConfig(s.engineConfig)
+		}
+
+		if status&engine.NeedUpdateTracker > 0 {
+			go s.engine.ParseTrackerList()
+		}
+		if status&engine.NeedUpdateRSS > 0 {
+			go s.updateRSS()
 		}
 		s.state.Push()
+
+		// do after config synced
+		s.state.UseQueue = (s.engineConfig.MaxConcurrentTask > 0)
+		if status&engine.NeedLoadWaitList > 0 {
+			go func() {
+				for {
+					if err := s.engine.NextWaitTask(); err != nil {
+						if errors.Is(err, engine.ErrMaxConnTasks) || errors.Is(err, engine.ErrWaitListEmpty) {
+							break
+						}
+					}
+				}
+			}()
+		}
 	} else {
 		log.Printf("[api] configure unchanged")
 	}
+
+	// update search config anyway
+	go s.fetchSearchConfig(s.engineConfig.ScraperURL)
 	return nil
+}
+
+func (s *Server) GetStrAttribute(name string) string {
+	cval := reflect.Indirect(reflect.ValueOf(s)).FieldByName(name)
+	return cval.String()
 }

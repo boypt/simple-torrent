@@ -5,7 +5,7 @@ import (
 	"log"
 	"os"
 
-	"github.com/jpillora/cloud-torrent/server"
+	"github.com/boypt/simple-torrent/server"
 	"github.com/jpillora/opts"
 )
 
@@ -13,8 +13,9 @@ var VERSION = "0.0.0-src" //set with ldflags
 
 func main() {
 	s := server.Server{
-		Title: "SimpleTorrent",
-		Port:  3000,
+		Title:  "SimpleTorrent",
+		Port:   3000, // depreciated
+		Listen: ":3000",
 	}
 
 	o := opts.New(&s)

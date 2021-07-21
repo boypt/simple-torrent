@@ -4,32 +4,55 @@ __file="${__dir}/$(basename "${BASH_SOURCE[0]}")"
 __base="$(basename ${__file} .sh)"
 __root="$(cd "$(dirname "${__dir}")" && pwd)" # <-- change this as it depends on your app
 
+BINPREFIX=""
 BIN=cloud-torrent
+
+if [[ -d ${BINLOCATION} ]]; then
+	BINPREFIX=${BINLOCATION}/
+fi
+
 GITVER=$(git describe --tags)
 
 OS=""
 ARCH=""
-EXESUFFIX=""
-PKGCMD="gzip"
+SUFFIX=""
+OSSUFFIX=""
+PKGCMD=
 NOSTATIC=
+CGO=1
+STASHED=0
 
 for arg in "$@"; do
 case $arg in
+	amd64)
+		ARCH=amd64
+		;;
+	arm64)
+		ARCH=arm64
+		;;
 	386)
-		GOARCH=386
+		ARCH=386
 		;;
 	windows)
 		OS=windows
-		EXESUFFIX=.exe
+		OSSUFFIX=.exe
+		;;
+	darwin)
+		OS=darwin
+		ARCH=amd64
 		;;
 	xz)
 		PKGCMD=xz
-    		;;
+    	;;
 	nostat)
 		NOSTATIC=1
-    		;;
-	nozip)
-		PKGCMD=
+    	;;
+	gzip)
+		PKGCMD=gzip
+		;;
+	purego)
+		CGO=0
+		SUFFIX=_static
 		;;
 esac
 done
@@ -43,27 +66,14 @@ if [[ -z $ARCH ]]; then
   ARCH=$(go env GOARCH)
 fi
 
-if [[ -z $NOSTATIC ]]; then
-	pushd $__dir/../static
-	if ! git diff-index --quiet HEAD . ; then
-	echo "Warning: static change and not commited"
-	exit 1
-	fi
-	sh generate.sh
-	popd
-fi
-
 pushd $__dir/..
-BINFILE=${BIN}_${OS}_${ARCH}${SUFFIX} 
-rm -fv ${BIN}_*
-CGO_ENABLED=0 GOARCH=$ARCH GOOS=$OS go build -o ${BINFILE}${EXESUFFIX} -ldflags "-s -w -X main.VERSION=$GITVER"
-if [[ ! -f ${BINFILE}${EXESUFFIX} ]]; then
+BINFILE=${BINPREFIX}${BIN}_${OS}_${ARCH}${SUFFIX}${OSSUFFIX}
+CGO_ENABLED=$CGO GOARCH=$ARCH GOOS=$OS go build -o ${BINFILE} -trimpath -ldflags "-s -w -X main.VERSION=$GITVER"
+if [[ ! -f ${BINFILE} ]]; then
   echo "Build failed. Check with error message above."
   exit 1
 fi
 
-git co HEAD -- static/files.go
-
 if [[ ! -z $PKGCMD ]]; then
-  ${PKGCMD} -v -9 -k ${BINFILE}${EXESUFFIX}
+  ${PKGCMD} -v -9 ${BINFILE}
 fi

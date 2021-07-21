@@ -4,14 +4,12 @@ import (
 	"os"
 	"runtime"
 
-	velox "github.com/jpillora/velox/go"
-	"github.com/shirou/gopsutil/cpu"
-	"github.com/shirou/gopsutil/disk"
-	"github.com/shirou/gopsutil/mem"
+	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
+	"github.com/shirou/gopsutil/v3/mem"
 )
 
-type stats struct {
-	Set             bool    `json:"set"`
+type osStats struct {
 	CPU             float64 `json:"cpu"`
 	DiskFree        uint64  `json:"diskFree"`
 	DiskUsedPercent float64 `json:"diskUsedPercent"`
@@ -19,16 +17,16 @@ type stats struct {
 	GoMemory        int64   `json:"goMemory"`
 	GoRoutines      int     `json:"goRoutines"`
 	//internal
-	pusher velox.Pusher
+	diskDirPath string
 }
 
-func (s *stats) loadStats(diskDir string) {
+func (s *osStats) loadStats() {
 	//count cpu cycles between last count
 	//count disk usage
 	if cpu, err := cpu.Percent(0, false); err == nil {
 		s.CPU = cpu[0]
 	}
-	if stat, err := disk.Usage(diskDir); err == nil {
+	if stat, err := disk.Usage(s.diskDirPath); err == nil {
 		s.DiskUsedPercent = stat.UsedPercent
 		s.DiskFree = stat.Free
 	}
@@ -39,12 +37,9 @@ func (s *stats) loadStats(diskDir string) {
 	//count total bytes allocated by the go runtime
 	memStats := runtime.MemStats{}
 	runtime.ReadMemStats(&memStats)
-	s.GoMemory = int64(memStats.Alloc)
+	s.GoMemory = int64(memStats.Sys)
 	//count current number of goroutines
 	s.GoRoutines = runtime.NumGoroutine()
-	//done
-	s.Set = true
-	s.pusher.Push()
 }
 
 func detectDiskStat(dir string) error {

@@ -2,8 +2,8 @@ package server
 
 import (
 	"encoding/json"
-	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -11,12 +11,17 @@ import (
 	"github.com/mmcdole/gofeed"
 )
 
+var (
+	magnetExp = regexp.MustCompile(`magnet:[^< ]+`)
+)
+
 type rssJSONItem struct {
-	Name            string `json:"name,omitempty"`
-	Magnet          string `json:"magnet,omitempty"`
-	InfoHash        string `json:"hashinfo,omitempty"`
-	Published       string `json:"published,omitempty"`
-	URL             string `json:"url,omitempty"`
+	Name            string `json:"name"`
+	Magnet          string `json:"magnet"`
+	InfoHash        string `json:"hashinfo"`
+	Published       string `json:"published"`
+	URL             string `json:"url"`
+	Torrent         string `json:"torrent"`
 	publishedParsed *time.Time
 }
 
@@ -25,23 +30,22 @@ func (s *Server) updateRSS() {
 	fp.Client = &http.Client{
 		Timeout: 60 * time.Second,
 	}
-	for _, rss := range strings.Split(s.state.Config.RssURL, "\n") {
+	for _, rss := range strings.Split(s.engineConfig.RssURL, "\n") {
 		if !strings.HasPrefix(rss, "http://") && !strings.HasPrefix(rss, "https://") {
 			continue
 		}
 		rss = strings.TrimSpace(rss)
 		feed, err := fp.ParseURL(rss)
 		if err != nil {
-			log.Printf("parse feed err %s", err.Error())
+			log.Printf("RSS: parse feed err %s", err.Error())
 			continue
 		}
 
 		if s.Debug {
-			log.Printf("retrived feed %s from %s", feed.Title, rss)
+			log.Printf("RSS: retrived feed %s from %s", feed.Title, rss)
 		}
 
-		s.state.Lock()
-		if oldmark, ok := s.state.rssMark[rss]; ok {
+		if oldmark, ok := s.rssMark[rss]; ok {
 			var lastIdx int
 			for i, item := range feed.Items {
 				if item.GUID == oldmark {
@@ -50,34 +54,32 @@ func (s *Server) updateRSS() {
 				}
 			}
 			if lastIdx > 0 {
-				log.Printf("feed updated with %d new items", lastIdx)
-				s.state.rssMark[rss] = feed.Items[0].GUID
-				s.state.rssCache = append(feed.Items[:lastIdx], s.state.rssCache...)
+				log.Printf("RSS: feed updated with %d new items", lastIdx)
+				s.rssMark[rss] = feed.Items[0].GUID
+				s.rssCache = append(feed.Items[:lastIdx], s.rssCache...)
 			}
 		} else if len(feed.Items) > 0 {
 			if s.Debug {
-				log.Printf("retrive %d new items, first record", len(feed.Items))
+				log.Printf("RSS: retrive %d new items, first record", len(feed.Items))
 			}
-			s.state.rssMark[rss] = feed.Items[0].GUID
-			s.state.rssCache = append(feed.Items, s.state.rssCache...)
+			s.rssMark[rss] = feed.Items[0].GUID
+			s.rssCache = append(feed.Items, s.rssCache...)
 		}
 
-		if len(s.state.rssCache) > 200 {
-			s.state.rssCache = s.state.rssCache[:200]
+		if len(s.rssCache) > 200 {
+			s.rssCache = s.rssCache[:200]
 		}
-		s.state.Unlock()
 	}
 
-	s.state.Lock()
 	// sort the retrived feed by Published attr
 	// make sure the first is the latest
-	sort.Slice(s.state.rssCache, func(i, j int) bool {
-		return s.state.rssCache[i].PublishedParsed.After(*(s.state.rssCache[j].PublishedParsed))
+	sort.Slice(s.rssCache, func(i, j int) bool {
+		return s.rssCache[i].PublishedParsed.After(*(s.rssCache[j].PublishedParsed))
 	})
-	if len(s.state.rssCache) > 0 {
-		s.state.LatestRSSGuid = s.state.rssCache[0].GUID
+	if len(s.rssCache) > 0 {
+		s.state.LatestRSSGuid = s.rssCache[0].GUID
+		s.state.Push()
 	}
-	s.state.Unlock()
 }
 
 func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
@@ -87,7 +89,7 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var results []rssJSONItem
-	for _, i := range s.state.rssCache {
+	for _, i := range s.rssCache {
 		ritem := rssJSONItem{
 			Name:            i.Title,
 			Published:       i.Published,
@@ -109,11 +111,21 @@ func (s *Server) serveRSS(w http.ResponseWriter, r *http.Request) {
 			for _, e := range i.Enclosures {
 				if strings.HasPrefix(e.URL, "magnet:") {
 					ritem.Magnet = e.URL
+				} else if e.Type == "application/x-bittorrent" {
+					ritem.Torrent = e.URL
 				}
 			}
 
-			if ritem.Magnet == "" {
-				ritem.Magnet = i.Link
+			// not found magnet/torrent,
+			if ritem.Magnet == "" && ritem.InfoHash == "" && ritem.Torrent == "" {
+
+				// find magnet in description
+				if s := magnetExp.FindString(i.Description); s != "" {
+					ritem.Magnet = s
+				} else {
+					//fallback to the link (likely not a magnet feed)
+					ritem.Magnet = i.Link
+				}
 			}
 		}
 		results = append(results, ritem)

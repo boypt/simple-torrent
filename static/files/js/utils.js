@@ -1,17 +1,56 @@
 /* globals app,window */
 
+app.factory("reqerr", function ($rootScope, $log) {
+  return function (xhr) {
+    $rootScope.err = `${xhr.xhrStatus}: ${xhr.statusText}/${xhr.status}`
+    if (!xhr.data) {
+      // data is null, xhr error
+      $log.error(JSON.stringify(xhr));
+    } else {
+      switch (typeof xhr.data) {
+        case "string":
+          $rootScope.err += ` :${xhr.data}`;
+          break;
+        case "object":
+          if ("error" in xhr.data) {
+            $rootScope.err += ` :${xhr.data.error}`;
+          } else {
+            $rootScope.err += JSON.stringify(xhr);
+          }
+          break;
+      }
+    }
+    $rootScope.$applyAsync();
+    return xhr;
+  };
+});
+
+app.factory("reqinfo", function ($rootScope) {
+  return function (xhr) {
+    if ("data" in xhr) {
+      $rootScope.info = `${xhr.data}`
+      $rootScope.$applyAsync();
+    }
+    return xhr;
+  };
+});
+
 app.factory("api", function ($rootScope, $http, reqerr) {
-  window.http = $http;
   var request = function (action, data) {
     var url = "api/" + action;
     $rootScope.apiing = true;
+    $rootScope.$applyAsync();
     var req = $http.post(url, data, {
       transformRequest: []
     })
-    req.error(reqerr);
-    req.finally(function () {
-      $rootScope.apiing = false;
-    });
+      .then(function (xhr) {
+        console.log(`API ${url}->${xhr.data}`);
+        return xhr;
+      })
+      .catch(reqerr)
+      .finally(function () {
+        $rootScope.apiing = false;
+      });
     return req;
   };
   var api = {};
@@ -34,16 +73,23 @@ app.factory("apiget", function ($rootScope, $http, reqerr) {
   var request = function (action, data) {
     var url = "api/" + action;
     $rootScope.apiing = true;
-    var req = $http.get(url);
-    req.error(reqerr);
-    req.finally(function () {
-      $rootScope.apiing = false;
-    });
+    $rootScope.$applyAsync();
+    var req = $http.get(url)
+      .then(function (xhr) {
+        console.log(`APIGET ${url}`);
+        return xhr
+      }, reqerr)
+      .finally(function () {
+        $rootScope.apiing = false;
+      });
     return req;
   };
   var api = {};
   var actions = [
-    "enginedebug"
+    "configure",
+    "enginedebug",
+    "searchproviders",
+    "files"
   ];
   actions.forEach(function (action) {
     api[action] = request.bind(null, action);
@@ -57,21 +103,21 @@ app.factory("search", function ($rootScope, $http, reqerr) {
       var params = { query: query };
       if (page !== undefined) params.page = page;
       $rootScope.searching = true;
-      var req = $http.get("search/" + provider, { params: params });
-      req.error(reqerr);
-      req.finally(function () {
-        $rootScope.searching = false;
-      });
+      var req = $http.get("search/" + provider, { params: params })
+        .catch(reqerr)
+        .finally(function () {
+          $rootScope.searching = false;
+        });
       return req;
     },
     one: function (provider, path) {
       var opts = { params: { item: path } };
       $rootScope.searching = true;
-      var req = $http.get("search/" + provider + "/item", opts);
-      req.error(reqerr);
-      req.finally(function () {
-        $rootScope.searching = false;
-      });
+      var req = $http.get("search/" + provider + "/item", opts)
+        .catch(reqerr)
+        .finally(function () {
+          $rootScope.searching = false;
+        });
       return req;
     }
   };
@@ -85,9 +131,7 @@ app.factory("rss", function ($rootScope, $http, reqerr) {
       if (update) {
         config["params"]["update"] = 1;
       }
-      var req = $http.get("rss", config);
-      req.error(reqerr);
-      req.finally(function () {
+      var req = $http.get("rss", config).catch(reqerr).finally(function () {
         $rootScope.searching = false;
       });
       return req;
@@ -97,18 +141,6 @@ app.factory("rss", function ($rootScope, $http, reqerr) {
 
 app.factory("storage", function () {
   return window.localStorage || {};
-});
-
-app.factory("reqerr", function ($rootScope) {
-  return function (err, status) {
-    var msg = err;
-    if (typeof err === "object" && "error" in err) {
-      msg = err.error;
-    }
-    $rootScope.err = `${msg} - (${status})`
-    $rootScope.$apply();
-    console.log(msg, status);
-  };
 });
 
 app.filter("keys", function () {
@@ -144,8 +176,16 @@ app.factory("bytes", function () {
     var k = 1024,
       dm = 0,
       sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB', 'EB', 'ZB', 'YB'],
-      i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(dm)) + ' ' + sizes[i];
+      i = Math.floor(Math.log(bytes) / Math.log(k)),
+      dg = (bytes / Math.pow(k, i));
+
+    if (dg < 10) {
+      dm = 2
+    } else if (dg < 100) {
+      dm = 1
+    }
+
+    return parseFloat(dg.toFixed(dm)) + ' ' + sizes[i];
   };
 });
 
@@ -153,6 +193,19 @@ app.filter("round", function () {
   return function (n) {
     if (typeof n !== "number") {
       return n;
+    }
+    return Math.round(n * 10) / 10;
+  };
+});
+
+
+app.filter("ratioRound", function () {
+  return function (n) {
+    if (typeof n !== "number" || n == 0) {
+      return n;
+    }
+    if (n < 10) {
+      return n.toFixed(2);
     }
     return Math.round(n * 10) / 10;
   };
@@ -179,15 +232,6 @@ app.directive("ngEnter", function () {
         });
         event.preventDefault();
       }
-    });
-  };
-});
-
-//TODO remove this hack
-app.directive("jpSrc", function () {
-  return function (scope, element, attrs) {
-    scope.$watch(attrs.jpSrc, function (src) {
-      element.attr("src", src);
     });
   };
 });

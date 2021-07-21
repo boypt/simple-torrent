@@ -2,17 +2,18 @@
   <div class="column">
     <i class="square outline icon" ng-class="{minus: !$expanded, plus: $expanded}"></i>
     <span class="ui header">
-      Torrents
+      Torrents ({{ numKeys(state.Torrents) }})
       <span class="ui label">
         <i class="list icon"></i>
-        {{ numKeys(state.Torrents) }} task{{ numKeys(state.Torrents) <= 1 ? '' : 's' }}
+        ▲: {{ state.Stats.ConnStat.BytesWrittenData | bytes }}
+        ▼: {{ state.Stats.ConnStat.BytesReadUsefulData | bytes }}
       </span>
     </span>
   </div>
 </div>
 
 <div ng-if="isEmpty(state.Torrents)" class="ui message nodownloads">
-  <p>Add torrents above</p>
+  <p>Add torrents or magnet to download</p>
 </div>
 
 <div ng-if="!isEmpty(state.Torrents) && $expanded" class="ui raised segments">
@@ -20,7 +21,9 @@
     class="ui torrent segment">
 
     <div ng-if="!t.Loaded" class="ui active inverted dimmer">
-      <div class="ui text loader">Loading</div>
+      <div class="ui text loader">
+        {{ t.IsQueueing ? "Queueing":"Loading" }}
+      </div>
     </div>
 
     <div class="ui stackable grid">
@@ -34,14 +37,14 @@
           </a>
         </div>
         <div class="speed">
-          <span data-mode="Speed" class="ui label" title="Upload Speed" ng-class="{
+          <span data-mode="UpSpeed" class="ui label" title="Upload" ng-class="{
             yellow:t.UploadRate > 0 && t.UploadRate < 102400,
             green:t.UploadRate > 0 && t.UploadRate >= 102400
             }" ng-click="toggleTagDetail($event, t)">
             <i class="cloud upload icon"></i>
             {{t.UploadRate | bytes}}/s
           </span>
-          <span data-mode="Speed" class="ui label" title="Download Speed" ng-class="{
+          <span data-mode="DownSpeed" class="ui label" title="Download" ng-class="{
             yellow:t.DownloadRate > 0 && t.DownloadRate < 102400,
             green:t.DownloadRate > 0 && t.DownloadRate >= 102400
             }" ng-click="toggleTagDetail($event, t)">
@@ -58,13 +61,13 @@
           <span data-mode="Ratio" title="Ratio" class="ui label" ng-class="{
             green: t.SeedRatio >= 1 }" ng-click="toggleTagDetail($event, t)">
             <i class="exchange alternate icon"></i>
-            {{ t.SeedRatio | round }}
+            {{ t.SeedRatio | ratioRound }}
+            <div ng-if="t.IsSeeding" class="detail">🌱</div>
           </span>
         </div>
-        <div class="ui blue small progress" ng-class="{active: t.Percent > 0 && t.Percent < 100}">
-          <div class="bar" ng-style="{
-          width: (t.Percent > 10 ? t.Percent:10) + '%'}">
-            <div class="progress">{{t.Percent | round}}%</div>
+        <div class="ui blue small indeterminate progress" ng-class="{active: t.Percent > 0 && t.Percent < 100}">
+          <div class="bar" ng-style="{width: (t.Percent < 10 ? 10: t.Percent)+'%'}">
+            <div class="centered progress">{{t.Percent | round}}%</div>
           </div>
         </div>
       </div>
@@ -82,14 +85,27 @@
             ng-click="submitTorrent('stop', t)">
             <i class="stop icon"></i> Stop
           </button>
-          <button ng-if="!t.Started" ng-disabled="$rootScope.apiing" class="ui compact red button"
+          <button ng-if="!t.Loaded" ng-disabled="$rootScope.apiing" class="ui compact red button"
             style="z-index: 99999;" ng-click="submitTorrent('delete', t)">
-            <span ng-if="!t.Loaded">
-              <i class="ban icon"></i> Cancel</span>
-            <span ng-if="t.Loaded">
-              <i class="trash icon"></i> Remove</span>
+            <i class="ban icon"></i> Cancel
+          </button>
+          <button ng-if="t.Loaded && !t.Started" ng-disabled="$rootScope.apiing" class="ui compact orange button"
+            ng-click="onDeleteBtnClick(t)">
+            <i class="question icon"></i> Remove
           </button>
         </div>
+
+        <div ng-if="t.showSubBtns" class="ui mini buttons">
+          <button ng-disabled="$rootScope.apiing" class="ui compact yellow button"
+            title="Move the task to the last of wait queue" ng-click="submitTorrent('move2wait', t)">
+            <i class="clock icon"></i> Queue
+          </button>
+          <button ng-disabled="$rootScope.apiing" class="ui compact red button" title="Confirm Removing this task"
+            ng-click="submitTorrent('delete', t)">
+            <i class="trash icon"></i> Remove
+          </button>
+        </div>
+
 
         <div ng-if="t.Started" class="status download">
           <span title="Download Data" data-mode="Downloaded" class="ui label" title="Downloaded"
@@ -100,26 +116,110 @@
         </div>
       </div>
 
-      <div class="ui sixteen wide column" ng-if="t.$showMode">
+      <div class="ui sixteen wide column torrentinfobar" ng-if="t.$showMode">
         <div class="ui info message">
           <i class="close icon" ng-click="t.$showMode = null"></i>
-          <div class="header">
+          <h3 class="header">
+            <i class="tags icon"></i>
             {{t.$detailTitle}}
+          </h3>
+          <p></p>
+          <div ng-if="t.$showMode === 'UpSpeed'">
+            <div class="ui blue basic label">
+              <i class="tachometer alternate icon"></i>
+              Upload Speed
+              <div class="detail">{{t.UploadRate | bytes}}/s</div>
+            </div>
+            <div class="ui blue basic label">
+              <i class="cloud upload icon"></i>
+              Uploaded Data
+              <div class="detail">{{ t.Stats.BytesWritten | bytes }}</div>
+            </div>
           </div>
-          <p ng-if="t.$showMode === 'Speed'">
-            Upload : {{t.UploadRate | bytes}}/s | Download : {{t.DownloadRate | bytes}}/s
-          </p>
-          <p ng-if="t.$showMode === 'Peers'">
-            Total: {{ t.Stats.TotalPeers }} / Active: {{t.Stats.ActivePeers}} / HalfOpen: {{t.Stats.HalfOpenPeers}} /
-            Pending: {{t.Stats.PendingPeers}}
-          </p>
-          <p ng-if="t.$showMode === 'Ratio'">
-            Exchanged Ratio:{{ t.SeedRatio | round }} / Uploaded Data: {{ t.Stats.BytesWritten | bytes }} / Downloaded
-            Data: {{ t.Stats.BytesRead | bytes }}
-          </p>
-          <p ng-if="t.$showMode === 'Downloaded'">
-            Download Size: {{t.Downloaded | bytes}} / Total Size: {{t.Size | bytes}} - {{ t.Percent }}%
-          </p>
+          <div ng-if="t.$showMode === 'DownSpeed'">
+            <div class="ui blue basic label">
+              <i class="tachometer alternate icon"></i>
+              Download Speed
+              <div class="detail">{{t.DownloadRate | bytes}}/s</div>
+            </div>
+            <div class="ui blue basic label">
+              <i class="cloud download icon"></i>
+              Downloaded Data
+              <div class="detail">{{ t.Stats.BytesRead | bytes }}</div>
+            </div>
+          </div>
+          <div ng-if="t.$showMode === 'Peers'">
+
+            <div class="ui basic blue label">
+              <i class="users icon"></i>
+              Total
+              <div class="detail">{{ t.Stats.TotalPeers }}</div>
+            </div>
+            <div class="ui basic blue label">
+              <i class="user icon"></i>
+              Active
+              <div class="detail">{{t.Stats.ActivePeers}} </div>
+            </div>
+            <div class="ui basic blue label">
+              <i class="user md icon"></i>
+              HalfOpen
+              <div class="detail"> {{t.Stats.HalfOpenPeers}} </div>
+            </div>
+            <div class="ui basic blue label">
+              <i class="user plus icon"></i>
+              Pending
+              <div class="detail"> {{t.Stats.PendingPeers}} </div>
+            </div>
+          </div>
+
+          <div ng-if="t.$showMode === 'Ratio'">
+            <div class="ui blue basic label">
+              <i class="exchange icon"></i>
+              Exchanged Ratio
+              <div class="detail">{{ t.SeedRatio | round }}</div>
+            </div>
+            <div class="ui blue basic label">
+              <i class="hourglass start icon"></i>
+              Started
+              <div class="detail">{{ ago(t.StartedAt) }}</div>
+            </div>
+            <div ng-if="!(t.Done)" class="ui blue basic label">
+              <i class="hourglass half icon"></i>
+              Will Finish
+              <div class="detail">
+                {{ etaTime(t.Downloaded, t.Size, t.DownloadRate) }}
+              </div>
+            </div>
+            <div ng-if="t.Done" class="ui blue basic label">
+              <i class="hourglass end icon"></i>
+              Finished
+              <div class="detail">{{ ago(t.FinishedAt) }}</div>
+            </div>
+          </div>
+          <div ng-if="t.$showMode === 'Downloaded'">
+            <div class="ui blue basic label">
+              <i class="file outline icon"></i>
+              Download Size
+              <div class="detail">{{t.Downloaded | bytes}}</div>
+            </div>
+            <div class="ui blue basic label">
+              <i class="file icon"></i>
+              Total Size
+              <div class="detail"> {{t.Size | bytes}} </div>
+            </div>
+            <div class="ui blue basic label">
+              <i class="percent icon"></i>
+              Progress
+              <div class="detail"> {{t.Percent}} </div>
+            </div>
+            <div ng-if="!(t.Done)" class="ui blue basic label">
+              <i class="clock outline icon"></i>
+              ETA
+              <div class="detail">
+                {{ etaTime(t.Downloaded, t.Size, t.DownloadRate) }}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -140,7 +240,8 @@
               Copy
             </button>
           </div>
-          <table class="ui unstackable compact striped downloads tcld table">
+
+          <table class="ui unstackable compact striped downloads table">
             <thead>
               <tr>
                 <th class="name">File</th>
@@ -155,20 +256,20 @@
               </tr>
               <tr class="download file" ng-repeat="f in t.Files | orderBy:'Path'">
                 <td class="name">
-                  <div>
-                    <span>{{ f.Path | filename }}</span>
-                    <span class="percent" ng-if="f.Percent > 0 && f.Percent < 100">{{ f.Percent }}% </span>
-                    <div ng-if="f.Percent > 0 && f.Percent < 100" class="ui blue active progress">
-                      <div class="bar" ng-style="{width: f.Percent + '%'}">
-                        <div class="progress"></div>
-                      </div>
+
+                  <span class="name">{{ f.Path | filename }}</span>
+
+                  <div class="ui teal indeterminate mini progress">
+                    <div class="bar" ng-style="{width: (f.Percent < 10 ? 10: f.Percent) + '%'}">
+                      <div class="progress">{{f.Percent + '%'}}</div>
                     </div>
-                    <!--
+                  </div>
+
+                  <!--
                 <a ng-show="f.Percent == 100" ng-href="{{ f.Path }}">
                   {{ f.Path | filename }}
                 </a>
                  -->
-                  </div>
                   <div ng-if="f.downloadError" class="ui error message">
                     <i class="close icon" ng-click="f.downloadError = null"></i>
                     <p>{{f.downloadError}}</p>
@@ -202,6 +303,7 @@
               </tr>
             </tfoot>
           </table>
+
         </div>
       </div>
     </div>
