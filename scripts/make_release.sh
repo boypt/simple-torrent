@@ -30,6 +30,9 @@ case $arg in
 	arm64)
 		ARCH=arm64
 		;;
+	armhf)
+		ARCH=armhf
+		;;	
 	386)
 		ARCH=386
 		;;
