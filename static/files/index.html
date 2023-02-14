@@ -69,7 +69,7 @@
 		<section class="downloads" ng-controller="DownloadsController" ng-include src="'template/download.html'">
 		</section>
 
-		<footer>
+		<!--  <footer>
 			<div>
 				<span>
 					<a rel="noreferrer" href="https://github.com/boypt/simple-torrent" target="_blank">SimpleTorrent</a>
@@ -82,7 +82,7 @@
 				<span>Up {{ ago([[.Uptime]]*1000) }}</span>
 				<span ng-if="numKeys(state.Users) > 1">, {{ numKeys(state.Users) }} users connected</span>
 			</div>
-		</footer>
+		</footer> -->
 		<div ng-if="$root.showEnineStatus" class="ui attached mini message">
 			<i ng-click="$root.showEnineStatus = false" class="close icon"></i>
 			<div class="header">
